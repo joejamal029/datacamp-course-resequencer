@@ -1,0 +1,21 @@
+﻿# Environment variables and secrets
+.env
+*.env
+
+# Cache and temporary artifacts
+.cache/
+frames/
+*.log
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.venv/
+venv/
+ENV/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+desktop.ini
