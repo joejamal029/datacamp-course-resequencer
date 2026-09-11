@@ -1,4 +1,4 @@
-﻿import json
+import json
 import re
 import time
 from pathlib import Path
@@ -29,6 +29,18 @@ class ChapterSchema:
 class CourseSchema:
     course_name: str
     chapters: list[ChapterSchema]
+
+def count_schema_videos(schema: CourseSchema) -> int:
+    """Count total video lessons across all chapters in the schema."""
+    return sum(
+        1 for ch in schema.chapters
+        for it in ch.items
+        if it.type == "video" or it.xp == 50
+    )
+
+def validate_video_count(schema: CourseSchema, mp4_count: int) -> bool:
+    """Global count constraint: schema video items must equal mp4 file count."""
+    return count_schema_videos(schema) == mp4_count
 
 def _call_gemini_vision(image_path: Path, prompt: str, api_key: str, model_name: str = "gemini-3.5-flash-lite") -> str:
     """Call Gemini Flash with an image with automatic retry on rate limits."""
@@ -78,12 +90,20 @@ Extract the chapter structure and return ONLY a valid JSON object with this exac
     {
       "order": <int, 1-indexed position in the chapter list>,
       "ex": <int, same as order (1-indexed item number in this chapter)>,
-      "type": "video" if 50 XP else "exercise",
+      "type": "video" or "exercise",
       "xp": <50 or 100>,
       "title": "<exact item title text>"
     }
   ]
 }
+
+CRITICAL Icon and Type Detection Guidelines:
+- Each item in the DataCamp outline has an icon to its left:
+  * A PLAY TRIANGLE (▷ or ▶, a right-pointing triangle inside or outside a circle) = video lesson, ALWAYS type: "video", ALWAYS 50 XP.
+  * ANGLE BRACKETS (<> or ◇, a diamond/chevron/code editor shape) = coding exercise, ALWAYS type: "exercise", ALWAYS 100 XP.
+- Use the icon shape as the PRIMARY signal for the "type" field. The XP value (50 vs 100) is the SECONDARY confirmation.
+- Ensure every single item listed under this chapter in the screenshot is captured in order.
+
 Do not wrap in markdown tags other than standard json code fences if needed. Output pure JSON."""
 
     raw_response = _call_gemini_vision(image_path, prompt, api_key, config.DEFAULT_MODEL)

@@ -1,4 +1,4 @@
-﻿---
+---
 name: datacamp-course-remediation
 description: |
   Ingests, classifies, and organizes raw, unorganized DataCamp course exports
@@ -46,13 +46,19 @@ Applies file moves with automatic backup manifest creation (`backup_manifest.jso
 python remediation_tool/remediate.py "path/to/course_folder" --execute
 ```
 
-### 3. Restore / Rollback (`.bak` System)
+### 3. Pure Video Mode (No Transcripts)
+When markdown transcripts are unavailable (common when assets are downloaded without web scrapes), run with `--mode pure_video`:
+```bash
+python remediation_tool/remediate.py "path/to/course_folder" --mode pure_video --execute
+```
+
+### 4. Restore / Rollback (`.bak` System)
 If anything goes wrong or needs to be reset, restore all files back to their exact original names and locations:
 ```bash
 python remediation_tool/remediate.py "path/to/course_folder" --restore
 ```
 
-### 4. Batch Mode
+### 5. Batch Mode
 Process all courses within a parent directory:
 ```bash
 python remediation_tool/remediate.py "path/to/parent_directory" --batch --execute
@@ -62,11 +68,21 @@ python remediation_tool/remediate.py "path/to/parent_directory" --batch --execut
 
 ## Architecture: Multi-Signal Corroboration Engine
 
-The remediation pipeline guarantees zero silent misfiles through 4 corroborating signals:
-1. **Deterministic Primary Key:** Every `.md` file ends with `campus.datacamp.com/courses/<course-slug>/<chapter-slug>?ex=<N>`. This deterministically identifies the chapter slug and exercise index.
-2. **Title Card OCR:** Early video frames (0.5s–3.0s) are extracted with `ffmpeg`, filtered for maximum Laplacian sharpness (rejecting black frames/fades), and OCR'd via Gemini Flash.
-3. **Duration Cross-Check:** Exact video duration from `ffprobe` is matched against timestamp ranges in the markdown transcript (`MM:SS - MM:SS`).
-4. **Ordinal Alignment:** Download order (`st_mtime` / numeric index) corroborates the sequence position when file counts match.
+The remediation pipeline operates in two distinct, auto-detected modes:
+
+### 1. Enhanced Mode (When Markdown Transcripts Exist)
+- **Deterministic Primary Key:** Every `.md` file ends with `campus.datacamp.com/courses/<course-slug>/<chapter-slug>?ex=<N>`. This deterministically identifies the chapter slug and exercise index.
+- **Title Card OCR:** Early video frames (0.5s–3.0s) are extracted with `ffmpeg`, filtered for maximum Laplacian sharpness (rejecting black frames/fades), and OCR'd via Gemini Flash.
+- **Duration Cross-Check:** Exact video duration from `ffprobe` is matched against timestamp ranges in the markdown transcript (`MM:SS - MM:SS`).
+- **Ordinal Alignment:** Download order corroborates the sequence position when file counts match.
+
+### 2. Pure Video Mode (When Transcripts Are Absent)
+- **Play Icon (`▶`) Syllabus Extraction:** Vision AI identifies video items (`▶`, 50 XP) vs coding exercises (`<>`, 100 XP) from syllabus screenshots.
+- **Global Count Constraint:** Pre-execution check verifying syllabus video count equals the `.mp4` file count.
+- **Title Card OCR:** Laplacian sharpness selection + Gemini Flash OCR.
+- **Opening Audio Speech Fallback:** If OCR is missing or ambiguous, extracts the first 15 seconds of audio via `ffmpeg` and uses Gemini to transcribe the instructor's spoken topic introduction.
+- **Global Bipartite Assignment:** N×N similarity matrix matching videos to syllabus slots. **Zero chronological or ordinal bias.**
+- **Congratulations! Anchor:** Identifies course completion video and locks it to the final syllabus slot.
 
 ---
 

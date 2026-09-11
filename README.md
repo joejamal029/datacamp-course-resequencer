@@ -1,4 +1,4 @@
-﻿# DataCamp Course Remediation Pipeline
+# DataCamp Course Remediation Pipeline
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -45,14 +45,20 @@ What is the API.md                                   ├── Chapter 2 - Advan
 
 ## Key Features
 
-* **Multi-Signal Corroboration (No Best-Guess Moves):**
-  * **Deterministic URL Indexing:** Extracts `(chapter_slug, ex)` directly from the transcript footer URL for 100% ground truth lesson identification.
-  * **Vision AI Title Card OCR:** Samples video frames across early timestamps (`0.5s` to `3.0s`) and filters for highest Laplacian variance (sharpness), ignoring fade-ins and black frames.
-  * **Duration Cross-Checking:** Verifies `ffprobe` video duration against the lesson transcript timestamp ranges.
-  * **Ordinal Alignment:** Corroborates chronological sequence when video counts align.
-* **100% Rollback Protection (`--restore`):** Every execution writes a `backup_manifest.json`. If anything ever looks wrong, a single command restores all files back to their exact original names and paths.
+* **Dual Operating Modes (Auto-Detected):**
+  * **Enhanced Mode (Markdown Transcripts Available):**
+    * **Deterministic URL Indexing:** Extracts `(chapter_slug, ex)` directly from transcript footer URLs for 100% ground-truth lesson identification.
+    * **Multi-Signal Corroboration:** Combines URL mapping, OCR title cards, and timestamp duration cross-checking.
+  * **Pure Video Mode (No Transcripts Needed — 95% of users):**
+    * **Play Icon (`▶`) Syllabus Extraction:** Vision AI distinguishes video lessons (play triangle, 50 XP) from coding exercises (`<>`, 100 XP) from outline screenshots.
+    * **Global Count Constraint Gate:** Verifies that detected syllabus videos match the exact number of `.mp4` files.
+    * **Vision AI Title Card OCR:** Extracts sharpest title frame (0.5s–3.0s) via Laplacian variance filtering.
+    * **Opening Audio Speech Fallback:** If OCR fails or is ambiguous, extracts the first 15 seconds of audio via `ffmpeg` and uses Gemini to transcribe the instructor's opening topic announcement (e.g. *"In this lesson, we'll cover text generation..."*).
+    * **Global Bipartite Assignment:** Matches videos to schema slots using an N×N similarity matrix. **Zero chronological bias, zero download-order bias, and zero ordinal alignment.**
+    * **"Congratulations!" Anchor:** Detects course wrap-up video and locks it to the final syllabus slot.
+* **100% Rollback Protection (`--restore`):** Every execution writes a `backup_manifest.json`. If anything looks wrong, a single command restores all files back to their exact original names and paths.
 * **Dry-Run by Default:** Inspect the full execution manifest (`move_plan.json`) before moving a single file on disk.
-* **Zero Dependencies Outside Standard Open-Source Stacks:** Uses `google-genai` / Gemini Flash Vision for free-tier speed, `opencv-python` for frame sharpness scoring, and `ffmpeg` for frame extraction.
+* **Zero Dependencies Outside Standard Open-Source Stacks:** Uses `google-genai` / Gemini Flash for free-tier speed, `opencv-python` for frame sharpness scoring, and `ffmpeg` for frame and audio extraction.
 * **Fully Idempotent:** Safe to run repeatedly; detects already-organized folders and performs zero redundant operations.
 * **Batch Processing:** Organize an entire library of courses with a single `--batch` flag.
 
@@ -103,13 +109,19 @@ Organize the course into structured chapter folders with automatic backup manife
 python remediate.py "/path/to/course_folder" --execute
 ```
 
-### 3. Instant Rollback / Restore
+### 3. Pure Video Mode (Explicit)
+Organize videos without markdown transcripts (ignores .md files if present):
+```bash
+python remediate.py "/path/to/course_folder" --mode pure_video --execute
+```
+
+### 4. Instant Rollback / Restore
 Restore all files back to their original names and locations:
 ```bash
 python remediate.py "/path/to/course_folder" --restore
 ```
 
-### 4. Batch Mode
+### 5. Batch Mode
 Process all courses inside a parent learning directory:
 ```bash
 python remediate.py "/path/to/all_courses" --batch --execute
@@ -122,22 +134,32 @@ python remediate.py "/path/to/all_courses" --batch --execute
 ```mermaid
 flowchart TD
     A[Course Folder] --> B[Stage 0: Schema Extraction]
-    B -->|Outline PNGs| B1[Gemini Flash Vision]
-    B1 -->|course_schema.json| C[Canonical Course Tree]
+    B -->|Outline PNGs: ▷ Video vs <> Exercise| B1[Gemini Flash Vision]
+    B1 -->|course_schema.json| C[Canonical Course Syllabus]
 
-    A --> D[Stage 1: Transcript Normalization]
-    D -->|Footer URLs ?ex=N| E[Deterministic Lesson Mapping]
+    A --> DET{Transcripts Present?}
 
-    A --> F[Stage 2: Video Identification]
-    F -->|ffmpeg early frames| G[Laplacian Sharpness Filter]
-    G -->|Optimal Frame| H[Gemini OCR Title Card]
+    DET -->|Yes: Enhanced Mode| D[Stage 1: Transcript URLs]
+    D -->|campus.datacamp.com ?ex=N| E[Deterministic URL Indexing]
 
-    C & E & H --> I[Stage 3: Multi-Signal Matcher]
-    I -->|Corroborate >= 2 Signals| J[Move Plan Manifest]
+    A --> F[Stage 2: Video Title Card OCR]
+    F -->|Sharpest Frame via Laplacian Variance| G[Gemini OCR Title]
+    G --> H{Title Found?}
+    H -->|No / Ambiguous| HF[Opening Audio Extraction]
+    HF -->|First 15s Speech via ffmpeg| HG[Gemini Audio Transcription]
+    H -->|Yes| I[Resolved Video Titles]
+    HG --> I
 
+    C & E & I --> M1[Enhanced Matcher: URL + OCR + Duration]
+    C & I --> M2[Pure Video Matcher: Bipartite Assignment + Congrats Anchor]
+
+    DET -->|No: Pure Video Mode| M2
+    DET -->|Yes| M1
+
+    M1 & M2 --> J[Move Plan Manifest]
     J --> K[Stage 4: File Operations]
     K -->|--execute| L[Structured Chapter Directories]
-    K -->|backup_manifest.json| M[Full Rollback Capability]
+    K -->|backup_manifest.json| M[Full Rollback Engine]
 ```
 
 ---
@@ -146,13 +168,14 @@ flowchart TD
 
 ```
 remediation_tool/
-├── remediate.py           # CLI entry point (dry-run, --execute, --restore, --batch)
+├── remediate.py           # CLI entry point (dry-run, --execute, --restore, --batch, --mode)
 ├── schema_extractor.py    # Vision AI syllabus parser (outline images -> course_schema.json)
 ├── md_parser.py           # Regex extractor for deterministic (?ex=N) footer URLs
 ├── video_identifier.py    # Multi-timestamp frame extractor, sharpness scorer, and OCR
-├── matcher.py             # Multi-signal corroboration engine
+├── audio_identifier.py    # Opening audio extractor (15s WAV) & speech transcription fallback
+├── matcher.py             # Dual matching engine (Enhanced multi-signal & Pure Video bipartite)
 ├── file_ops.py            # Manifest generator, safe mover, and backup/restore engine
-├── config.py              # Environment configuration and thresholds
+├── config.py              # Environment configuration, constants, and thresholds
 ├── utils.py               # Sanitization, Laplacian sharpness, hashing, time utilities
 ├── requirements.txt       # Python dependencies
 ├── .env.example           # Example configuration template

@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass, field
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from schema_extractor import CourseSchema, ChapterSchema, SchemaItem
@@ -26,12 +26,12 @@ def _string_similarity(a: str, b: str) -> float:
         return 0.0
     return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
 
-def match_course_assets(
+def _match_enhanced_mode(
     schema: CourseSchema,
     md_lessons: list[MdLessonInfo],
     videos: list[VideoInfo]
 ) -> list[MatchResult]:
-    """Corroborate multiple signals to match videos and markdown files to canonical schema lessons."""
+    """Enhanced Mode: Corroborate multiple signals (MD footer URL, OCR, duration) to match assets."""
     
     # 1. Map md files to (chapter_slug, ex)
     md_by_key: dict[tuple[str, int], MdLessonInfo] = {}
@@ -170,3 +170,158 @@ def match_course_assets(
         results[idx].needs_review = False
 
     return results
+
+def match_pure_video_mode(
+    schema: CourseSchema,
+    videos: list[VideoInfo]
+) -> list[MatchResult]:
+    """Pure Video Mode: Bipartite assignment using content-derived signals only.
+
+    Zero chronological bias. Zero ordinal alignment. Zero filename index sorting.
+    Signals used:
+      1. OCR Title Card similarity
+      2. Audio Speech transcription fallback similarity
+      3. Congratulations wrap-up anchor (final schema slot + short duration)
+    """
+    # 1. Canonical video lessons from schema
+    canonical_video_lessons: list[tuple[ChapterSchema, SchemaItem]] = []
+    for chapter in sorted(schema.chapters, key=lambda c: c.chapter_number):
+        for item in sorted(chapter.items, key=lambda it: it.order):
+            if item.type == "video" or item.xp == 50:
+                canonical_video_lessons.append((chapter, item))
+
+    N = len(canonical_video_lessons)
+    M = len(videos)
+
+    # 2. Build candidate match list for (canonical_idx, video_idx)
+    candidates = []
+    for i, (ch, item) in enumerate(canonical_video_lessons):
+        for j, vid in enumerate(videos):
+            ocr_sim = _string_similarity(vid.ocr_title, item.title) if vid.ocr_title and vid.ocr_title != "NO_TITLE_CARD" else 0.0
+            audio_sim = _string_similarity(vid.audio_title, item.title) if vid.audio_title and vid.audio_title != "UNKNOWN" else 0.0
+
+            if ocr_sim >= config.TITLE_MATCH_THRESHOLD:
+                candidates.append((ocr_sim, "ocr", ocr_sim, i, j))
+            elif audio_sim >= config.TITLE_MATCH_THRESHOLD:
+                weighted_score = audio_sim * 0.95
+                candidates.append((weighted_score, "audio", audio_sim, i, j))
+
+    # Sort candidates descending by score
+    candidates.sort(key=lambda x: -x[0])
+
+    assigned_c: dict[int, tuple[int, str, float]] = {}  # c_idx -> (v_idx, sig_type, sim)
+    used_v: set[int] = set()
+
+    for score, sig_type, sim, c_idx, v_idx in candidates:
+        if c_idx in assigned_c or v_idx in used_v:
+            continue
+        assigned_c[c_idx] = (v_idx, sig_type, sim)
+        used_v.add(v_idx)
+
+    # 3. Congratulations Anchor Lock
+    congrats_c_idx = None
+    for i, (ch, item) in enumerate(canonical_video_lessons):
+        if "congratulat" in item.title.lower():
+            congrats_c_idx = i
+
+    if congrats_c_idx is not None:
+        congrats_already_matched = False
+        if congrats_c_idx in assigned_c:
+            v_idx, sig, sim = assigned_c[congrats_c_idx]
+            v = videos[v_idx]
+            if "congratulat" in v.best_title.lower():
+                congrats_already_matched = True
+
+        if not congrats_already_matched:
+            unused_v_indices = [j for j in range(M) if j not in used_v]
+            shortest_unused = None
+            if unused_v_indices:
+                shortest_unused = min(unused_v_indices, key=lambda j: videos[j].duration_seconds)
+
+            if shortest_unused is not None and videos[shortest_unused].duration_seconds < config.CONGRATS_MAX_DURATION:
+                if congrats_c_idx in assigned_c:
+                    old_v, _, _ = assigned_c[congrats_c_idx]
+                    used_v.discard(old_v)
+                assigned_c[congrats_c_idx] = (shortest_unused, "congrats_anchor", 1.0)
+                used_v.add(shortest_unused)
+
+    # 4. Fill any remaining unassigned canonical slots with remaining unused videos
+    unassigned_c_indices = [i for i in range(N) if i not in assigned_c]
+    remaining_v_indices = [j for j in range(M) if j not in used_v]
+
+    for c_idx in unassigned_c_indices:
+        if not remaining_v_indices:
+            break
+        v_idx = remaining_v_indices.pop(0)
+        used_v.add(v_idx)
+        assigned_c[c_idx] = (v_idx, "unmatched_fallback", 0.0)
+
+    # 5. Build MatchResults
+    results: list[MatchResult] = []
+    for i, (chapter, item) in enumerate(canonical_video_lessons):
+        if i in assigned_c:
+            v_idx, sig_type, sim = assigned_c[i]
+            matched_video = videos[v_idx]
+            signals = []
+
+            if sig_type == "ocr":
+                signals.append(f"ocr_match('{matched_video.ocr_title}' ~ '{item.title}', sim={sim:.2f})")
+                confidence = min(1.0, 0.50 + sim * 0.50)
+                needs_review = confidence < config.CONFIDENCE_THRESHOLD
+            elif sig_type == "audio":
+                signals.append(f"audio_fallback_match('{matched_video.audio_title}' ~ '{item.title}', sim={sim:.2f})")
+                confidence = min(0.95, 0.40 + sim * 0.50)
+                needs_review = confidence < config.CONFIDENCE_THRESHOLD
+            elif sig_type == "congrats_anchor":
+                signals.append(f"congratulations_anchor_lock(dur={matched_video.duration_seconds:.1f}s)")
+                confidence = 0.95
+                needs_review = False
+            else:
+                signals.append("bipartite_residual_fallback")
+                confidence = 0.40
+                needs_review = True
+
+            reason = f"Confidence {confidence:.2f} below threshold ({config.CONFIDENCE_THRESHOLD})" if needs_review else ""
+            results.append(MatchResult(
+                video_path=matched_video.file_path,
+                md_path=None,
+                chapter_number=chapter.chapter_number,
+                chapter_title=chapter.chapter_title,
+                chapter_slug=chapter.chapter_slug,
+                ex=item.ex,
+                lesson_title=item.title,
+                confidence=confidence,
+                signals=signals,
+                needs_review=needs_review,
+                review_reason=reason
+            ))
+        else:
+            results.append(MatchResult(
+                video_path=None,
+                md_path=None,
+                chapter_number=chapter.chapter_number,
+                chapter_title=chapter.chapter_title,
+                chapter_slug=chapter.chapter_slug,
+                ex=item.ex,
+                lesson_title=item.title,
+                confidence=0.0,
+                signals=["no_video_available"],
+                needs_review=True,
+                review_reason="No video found to assign to this lesson"
+            ))
+
+    return results
+
+def match_course_assets(
+    schema: CourseSchema,
+    md_lessons: list[MdLessonInfo],
+    videos: list[VideoInfo]
+) -> list[MatchResult]:
+    """Corroborate signals to match course assets.
+    Dispatches to Enhanced Mode if MD transcripts are present,
+    or Pure Video Mode (zero ordinal bias) if MD transcripts are absent.
+    """
+    if md_lessons:
+        return _match_enhanced_mode(schema, md_lessons, videos)
+    else:
+        return match_pure_video_mode(schema, videos)

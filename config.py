@@ -38,3 +38,7 @@ CONFIDENCE_THRESHOLD = 0.70
 DURATION_TOLERANCE_SECONDS = 15.0
 CACHE_DIR = _TOOL_DIR / ".cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+AUDIO_CLIP_DURATION = 15.0      # seconds to extract for audio fallback
+AUDIO_CACHE_FILE = CACHE_DIR / "audio_cache.json"
+TITLE_MATCH_THRESHOLD = 0.50    # minimum SequenceMatcher score for bipartite assignment
+CONGRATS_MAX_DURATION = 120.0   # seconds — videos shorter than this are Congratulations candidates

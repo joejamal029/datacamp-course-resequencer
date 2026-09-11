@@ -1,10 +1,10 @@
-﻿import argparse
+import argparse
 import sys
 import shutil
 from pathlib import Path
 
 import config
-from schema_extractor import extract_or_load_schema
+from schema_extractor import extract_or_load_schema, validate_video_count, count_schema_videos
 from md_parser import parse_all_mds_in_course
 from video_identifier import identify_all_videos
 from matcher import match_course_assets
@@ -26,7 +26,13 @@ def print_header(title: str):
     print(f"  {title}")
     print("=" * 80)
 
-def remediate_single_course(course_dir: Path, execute: bool = False, restore: bool = False, threshold: float = config.CONFIDENCE_THRESHOLD):
+def remediate_single_course(
+    course_dir: Path,
+    execute: bool = False,
+    restore: bool = False,
+    threshold: float = config.CONFIDENCE_THRESHOLD,
+    mode: str = "auto"
+):
     if restore:
         print_header(f"RESTORING COURSE FROM BACKUP: {course_dir.name}")
         stats = restore_from_backup(course_dir)
@@ -34,14 +40,15 @@ def remediate_single_course(course_dir: Path, execute: bool = False, restore: bo
         return
 
     print_header(f"DATACAMP REMEDIATION PIPELINE: {course_dir.name}")
-    print(f"Mode: {'EXECUTE (Modifying disk with rollback manifest)' if execute else 'DRY RUN (Simulated)'}")
+    print(f"Execution: {'EXECUTE (Modifying disk with rollback manifest)' if execute else 'DRY RUN (Simulated)'}")
     print(f"Target Directory: {course_dir}")
 
     # Stage 0: Schema Extraction
     print_header("Stage 0: Course Schema Extraction")
     try:
         schema = extract_or_load_schema(course_dir)
-        print(f"Canonical schema loaded: {len(schema.chapters)} chapters")
+        schema_video_count = count_schema_videos(schema)
+        print(f"Canonical schema loaded: {len(schema.chapters)} chapters, {schema_video_count} total video lessons.")
         for ch in schema.chapters:
             videos_count = sum(1 for it in ch.items if it.type == "video" or it.xp == 50)
             print(f"  - Chapter {ch.chapter_number}: '{ch.chapter_title}' ({videos_count} video lessons)")
@@ -49,14 +56,25 @@ def remediate_single_course(course_dir: Path, execute: bool = False, restore: bo
         print(f"Failed to extract or load schema: {e}")
         return
 
-    # Stage 1: Markdown Parsing
-    print_header("Stage 1: Markdown Transcripts Normalization")
+    # Stage 1: Markdown Parsing & Mode Resolution
+    print_header("Stage 1: Transcripts Normalization & Mode Resolution")
     md_lessons = parse_all_mds_in_course(course_dir)
     print(f"Found {len(md_lessons)} unorganized markdown transcripts.")
 
+    if mode == "auto":
+        effective_mode = "enhanced" if len(md_lessons) > 0 else "pure_video"
+    else:
+        effective_mode = mode
+
+    print(f"Resolved Pipeline Mode: {effective_mode.upper()}")
+    if effective_mode == "pure_video" and len(md_lessons) > 0:
+        print("Notice: Pure Video Mode enforced via CLI; ignoring markdown transcripts for matching.")
+        md_lessons = []
+
     # Stage 2: Video Identification
-    print_header("Stage 2: Video Asset Fingerprinting & Title Extraction")
-    videos = identify_all_videos(course_dir)
+    print_header(f"Stage 2: Video Fingerprinting & Title Extraction ({effective_mode.upper()})")
+    enable_audio = (effective_mode == "pure_video")
+    videos = identify_all_videos(course_dir, enable_audio_fallback=enable_audio)
     print(f"Found {len(videos)} unorganized video files.")
 
     # Early exit if everything is already organized
@@ -65,8 +83,14 @@ def remediate_single_course(course_dir: Path, execute: bool = False, restore: bo
         print("Nothing to do.")
         return
 
+    # Global Count Constraint Validation (Pure Video Mode)
+    if effective_mode == "pure_video":
+        if not validate_video_count(schema, len(videos)):
+            print(f"WARNING: Count Mismatch! Schema specifies {schema_video_count} video lessons, but found {len(videos)} .mp4 files.")
+            print("Proceeding with bipartite matching to best match available assets.")
+
     # Stage 3: Multi-Signal Matching Engine
-    print_header("Stage 3: Multi-Signal Corroboration Engine")
+    print_header(f"Stage 3: Matching Engine ({effective_mode.upper()})")
     matches = match_course_assets(schema, md_lessons, videos)
 
     # Stage 4: Generate Move Plan Manifest
@@ -106,6 +130,13 @@ def main():
     parser.add_argument("--execute", action="store_true", help="Execute file moves immediately with backup tracking")
     parser.add_argument("--restore", action="store_true", help="Restore course folder back to original state from backup")
     parser.add_argument("--batch", action="store_true", help="Process all course subdirectories under target folder")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["auto", "enhanced", "pure_video"],
+        default="auto",
+        help="Pipeline mode: 'auto' (detect from .md existence), 'enhanced', or 'pure_video'"
+    )
     parser.add_argument("--threshold", type=float, default=config.CONFIDENCE_THRESHOLD, help="Confidence threshold")
     parser.add_argument("--model", type=str, default=config.DEFAULT_MODEL, help="Gemini model name")
 
@@ -130,9 +161,9 @@ def main():
             # Check if directory has outline images or mds or videos
             has_course_assets = any(d.glob("*.png")) or any(d.glob("*.mp4")) or any(d.glob("*.md"))
             if has_course_assets:
-                remediate_single_course(d, execute=args.execute, restore=args.restore, threshold=args.threshold)
+                remediate_single_course(d, execute=args.execute, restore=args.restore, threshold=args.threshold, mode=args.mode)
     else:
-        remediate_single_course(target_path, execute=args.execute, restore=args.restore, threshold=args.threshold)
+        remediate_single_course(target_path, execute=args.execute, restore=args.restore, threshold=args.threshold, mode=args.mode)
 
 if __name__ == "__main__":
     main()

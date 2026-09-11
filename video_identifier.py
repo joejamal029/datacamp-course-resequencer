@@ -1,4 +1,4 @@
-﻿import json
+import json
 import time
 import subprocess
 from pathlib import Path
@@ -7,6 +7,7 @@ from PIL import Image
 
 import config
 from utils import get_video_fingerprint, calculate_image_sharpness
+from audio_identifier import get_audio_title_for_video
 
 @dataclass
 class VideoInfo:
@@ -14,8 +15,18 @@ class VideoInfo:
     file_name: str
     duration_seconds: float
     ocr_title: str
-    frame_path: str
-    fingerprint: str
+    audio_title: str = ""
+    frame_path: str = ""
+    fingerprint: str = ""
+
+    @property
+    def best_title(self) -> str:
+        """Return the strongest title signal available (OCR first, then Audio)."""
+        if self.ocr_title and self.ocr_title != "NO_TITLE_CARD":
+            return self.ocr_title
+        if self.audio_title and self.audio_title != "UNKNOWN":
+            return self.audio_title
+        return ""
 
 _CACHE_FILE = config.CACHE_DIR / "video_cache.json"
 
@@ -97,18 +108,36 @@ If no title card is visible, return "NO_TITLE_CARD"."""
                 return ""
     return ""
 
-def identify_video(video_path: Path | str, course_dir: Path | str | None = None) -> VideoInfo:
+def identify_video(
+    video_path: Path | str,
+    course_dir: Path | str | None = None,
+    enable_audio_fallback: bool = True
+) -> VideoInfo:
     path = Path(video_path)
     fp = get_video_fingerprint(path)
     cache = _load_cache()
 
     if fp in cache and cache[fp].get("ocr_title") and "OPENAI API" not in cache[fp].get("ocr_title", "").upper():
         item = cache[fp]
+        ocr = item.get("ocr_title", "")
+        audio_t = item.get("audio_title", "")
+
+        # If OCR did not find a title and audio fallback is requested but not yet performed
+        if enable_audio_fallback and ocr in ("", "NO_TITLE_CARD") and not audio_t:
+            try:
+                api_key = config.get_gemini_api_key(course_dir or path.parent)
+                audio_t = get_audio_title_for_video(path, api_key, fingerprint=fp)
+                item["audio_title"] = audio_t
+                _save_cache(cache)
+            except Exception as e:
+                print(f"Notice: Audio fallback skipped for {path.name}: {e}")
+
         return VideoInfo(
             file_path=path,
             file_name=path.name,
             duration_seconds=item.get("duration_seconds", 0.0),
-            ocr_title=item.get("ocr_title", ""),
+            ocr_title=ocr,
+            audio_title=audio_t,
             frame_path=item.get("frame_path", ""),
             fingerprint=fp
         )
@@ -128,12 +157,21 @@ def identify_video(video_path: Path | str, course_dir: Path | str | None = None)
         print(f"Notice: OCR skipped for {path.name}: {e}")
         ocr_title = ""
 
+    audio_title = ""
+    if enable_audio_fallback and ocr_title in ("", "NO_TITLE_CARD"):
+        try:
+            api_key = config.get_gemini_api_key(course_dir or path.parent)
+            audio_title = get_audio_title_for_video(path, api_key, fingerprint=fp)
+        except Exception as e:
+            print(f"Notice: Audio fallback skipped for {path.name}: {e}")
+
     frame_str = str(best_frame) if best_frame else ""
     info = VideoInfo(
         file_path=path,
         file_name=path.name,
         duration_seconds=duration,
         ocr_title=ocr_title,
+        audio_title=audio_title,
         frame_path=frame_str,
         fingerprint=fp
     )
@@ -142,15 +180,17 @@ def identify_video(video_path: Path | str, course_dir: Path | str | None = None)
         "file_name": path.name,
         "duration_seconds": duration,
         "ocr_title": ocr_title,
+        "audio_title": audio_title,
         "frame_path": frame_str
     }
     _save_cache(cache)
     return info
 
-def identify_all_videos(course_dir: Path | str) -> list[VideoInfo]:
+def identify_all_videos(course_dir: Path | str, enable_audio_fallback: bool = True) -> list[VideoInfo]:
     c_dir = Path(course_dir)
     videos = sorted(c_dir.glob("*.mp4"))
     results = []
     for vid in videos:
-        results.append(identify_video(vid, course_dir=c_dir))
+        results.append(identify_video(vid, course_dir=c_dir, enable_audio_fallback=enable_audio_fallback))
     return results
+
