@@ -1,165 +1,125 @@
-# DataCamp Course Remediation Pipeline
+# DataCamp Course Resequencer
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-An autonomous, multi-signal remediation engine designed to transform flat, disorganized dumps of downloaded DataCamp courses into clean, structured, and numbered chapter libraries with **zero silent misfiles**.
+An autonomous, multimodal resequencing engine that transforms chaotic, unlabelled course video dumps (`video.mp4`, `video (14).mp4`) into clean, numbered chapter libraries using **Computer Vision OCR**, **Audio Speech Ear-marking**, and **Bipartite Assignment**—with **zero chronological bias** and **zero scraped transcripts required**.
 
 ---
 
-## The Problem
+## The Origin & Philosophy
 
-When downloading courses in parts, assets typically land in a single unorganized folder:
-* **Unnamed Videos:** Files named generically like `video.mp4`, `video (1).mp4`, `video (10).mp4`.
-* **Noisy Transcripts:** Markdown files with extra suffixes, e.g. `Multi-step prompting _ OpenAI.md` or `Deployment _ Theory.md`.
-* **Chapter Outlines:** Loose screenshots (`1.0.png`, `2.0.png`...) showing the syllabus.
+### 1. Built for the Offline Learner (Digital Equity)
+Most modern online learning platforms assume continuous high-speed broadband and 24/7 reliable electricity. For learners in regions with fluctuating power grids and expensive mobile data, streaming high-definition video during study hours is a luxury.
 
-Sorting dozens of lessons manually is tedious and prone to errors. Furthermore, naive matching algorithms fail because:
-1. Videos are often downloaded asynchronously or out of order.
-2. Title cards may fade in after 1–2 seconds.
-3. Some lessons share identical or near-duplicate titles across chapters.
+If you are a paying subscriber, having ready offline access to study materials during outages is essential. This pipeline was built out of the necessity to make offline study seamless for paying subscribers in resource-constrained environments.
 
----
+### 2. The Multi-Tab Reality (Why Chronological Sorting Fails)
+When saving course videos manually for offline review, learners typically open course lessons across multiple browser tabs and trigger downloads in parallel.
 
-## The Solution
+Because parallel downloads compete for bandwidth, **they finish based on file size and connection speed, not syllabus sequence**. A 45-second wrap-up video initiated in Tab 10 will land on disk minutes before a 5-minute deep dive initiated in Tab 2.
 
-This tool combines **deterministic parsing**, **computer vision OCR**, **audio/video duration analysis**, and **smart multi-signal corroboration** to match every video and transcript to its canonical position in the course syllabus.
+Sorting by download time (`st_mtime`) or browser collision numbers (`video (1).mp4`, `video (2).mp4`) is a guaranteed recipe for corrupted, out-of-order course sequences. This tool enforces a strict mandate: **Zero chronological bias**. Every asset is matched strictly by its intrinsic multimodal content.
 
-```
-Raw Flat Folder                                      Organized Course
--------------------                                  ----------------
-1.0.png                                              ├── Chapter 1 - Introduction/
-2.0.png                                              │   ├── 01 - What is the API.mp4
-video.mp4                                            │   ├── 01 - What is the API.md
-video (10).mp4             =================>        │   ├── 05 - First Request.mp4
-Multi-step prompting.md                              │   └── 05 - First Request.md
-What is the API.md                                   ├── Chapter 2 - Advanced/
-...                                                  │   └── ...
-                                                     ├── course_schema.json
-                                                     ├── move_plan.json
-                                                     └── backup_manifest.json
-```
+### 3. Eliminating the Scraper Tax (Pure Video Mode)
+Early workflows relied on web page scraping and markdown transcripts. While accurate, requiring learners to install browser extensions (such as Affine) and click through extra export steps adds adoption friction to every single download cycle.
+
+The primary capability of this tool is **Pure Video Mode**: drop in raw, unlabelled `.mp4` files alongside syllabus outline screenshots, and let multimodal AI (Vision + Audio Speech) do 100% of the cognitive lifting.
 
 ---
 
-## Key Features
+## How It Works: Multi-Signal Resequencing
 
-* **Dual Operating Modes (Auto-Detected):**
-  * **Enhanced Mode (Markdown Transcripts Available):**
-    * **Deterministic URL Indexing:** Extracts `(chapter_slug, ex)` directly from transcript footer URLs for 100% ground-truth lesson identification.
-    * **Multi-Signal Corroboration:** Combines URL mapping, OCR title cards, and timestamp duration cross-checking.
-  * **Pure Video Mode (No Transcripts Needed — 95% of users):**
-    * **Play Icon (`▶`) Syllabus Extraction:** Vision AI distinguishes video lessons (play triangle, 50 XP) from coding exercises (`<>`, 100 XP) from outline screenshots.
-    * **Global Count Constraint Gate:** Verifies that detected syllabus videos match the exact number of `.mp4` files.
-    * **Vision AI Title Card OCR:** Extracts sharpest title frame (0.5s–3.0s) via Laplacian variance filtering.
-    * **Opening Audio Speech Fallback:** If OCR fails or is ambiguous, extracts the first 15 seconds of audio via `ffmpeg` and uses Gemini to transcribe the instructor's opening topic announcement (e.g. *"In this lesson, we'll cover text generation..."*).
-    * **Global Bipartite Assignment:** Matches videos to schema slots using an N×N similarity matrix. **Zero chronological bias, zero download-order bias, and zero ordinal alignment.**
-    * **"Congratulations!" Anchor:** Detects course wrap-up video and locks it to the final syllabus slot.
-* **100% Rollback Protection (`--restore`):** Every execution writes a `backup_manifest.json`. If anything looks wrong, a single command restores all files back to their exact original names and paths.
-* **Dry-Run by Default:** Inspect the full execution manifest (`move_plan.json`) before moving a single file on disk.
-* **Zero Dependencies Outside Standard Open-Source Stacks:** Uses `google-genai` / Gemini Flash for free-tier speed, `opencv-python` for frame sharpness scoring, and `ffmpeg` for frame and audio extraction.
-* **Fully Idempotent:** Safe to run repeatedly; detects already-organized folders and performs zero redundant operations.
-* **Batch Processing:** Organize an entire library of courses with a single `--batch` flag.
-
----
-
-## Installation
-
-### 1. Prerequisites
-* **Python 3.10+**
-* **FFmpeg and FFprobe:** Ensure `ffmpeg` and `ffprobe` are installed and available on your system `PATH`.
-  * *Windows:* `winget install ffmpeg`
-  * *macOS:* `brew install ffmpeg`
-  * *Linux:* `sudo apt-get install ffmpeg`
-
-### 2. Clone and Setup
-```bash
-git clone https://github.com/your-username/datacamp-remediation.git
-cd datacamp-remediation
-
-# Create and activate virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
-
-# Install requirements
-pip install -r requirements.txt
-```
-
-### 3. Configure API Key
-Create a `.env` file in the project directory:
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.5-flash
-```
-
----
-
-## Usage
-
-### 1. Dry Run (Preview Changes)
-Simulate the reorganization and generate the audit manifest without touching files:
-```bash
-python remediate.py "/path/to/course_folder"
-```
-
-### 2. Execute Organization
-Organize the course into structured chapter folders with automatic backup manifest creation:
-```bash
-python remediate.py "/path/to/course_folder" --execute
-```
-
-### 3. Pure Video Mode (Explicit)
-Organize videos without markdown transcripts (ignores .md files if present):
-```bash
-python remediate.py "/path/to/course_folder" --mode pure_video --execute
-```
-
-### 4. Instant Rollback / Restore
-Restore all files back to their original names and locations:
-```bash
-python remediate.py "/path/to/course_folder" --restore
-```
-
-### 5. Batch Mode
-Process all courses inside a parent learning directory:
-```bash
-python remediate.py "/path/to/all_courses" --batch --execute
-```
-
----
-
-## Architecture & Pipeline Flow
+Instead of guessing or relying on timestamps, the engine uses content-derived corroboration:
 
 ```mermaid
 flowchart TD
-    A[Course Folder] --> B[Stage 0: Schema Extraction]
-    B -->|Outline PNGs: ▷ Video vs <> Exercise| B1[Gemini Flash Vision]
-    B1 -->|course_schema.json| C[Canonical Course Syllabus]
+    A[Unlabelled Course Dump\n1.0.png, video.mp4, video 14.mp4] --> B[Stage 0: Syllabus Vision Extraction]
+    B -->|Detect ▷ Video vs <> Exercise| B1[(Canonical Course Syllabus\ncourse_schema.json)]
 
-    A --> DET{Transcripts Present?}
+    A --> C[Stage 1: Video Title Card OCR]
+    C -->|Laplacian Variance Filter\nSkip fade-ins & black frames| D[Sharpest Title Card]
+    D -->|Gemini Vision OCR| E{Title Found?}
 
-    DET -->|Yes: Enhanced Mode| D[Stage 1: Transcript URLs]
-    D -->|campus.datacamp.com ?ex=N| E[Deterministic URL Indexing]
+    E -->|No / Ambiguous| F[Stage 2: Audio Speech Ear-marking]
+    F -->|First 15s PCM WAV via ffmpeg| G[Gemini Speech Transcription\n'In this lesson, we will cover...']
+    G --> H[Resolved Lesson Title]
+    E -->|Yes| H
 
-    A --> F[Stage 2: Video Title Card OCR]
-    F -->|Sharpest Frame via Laplacian Variance| G[Gemini OCR Title]
-    G --> H{Title Found?}
-    H -->|No / Ambiguous| HF[Opening Audio Extraction]
-    HF -->|First 15s Speech via ffmpeg| HG[Gemini Audio Transcription]
-    H -->|Yes| I[Resolved Video Titles]
-    HG --> I
+    B1 & H --> I[Stage 3: Global Bipartite Assignment]
+    I -->|N x M Similarity Matrix\nNo Ordinal or Download-Order Bias| J[Optimal Asset Assignment]
+    I -->|Duration < 120s & Keyword Anchor| K['Congratulations!' Wrap-up Lock]
 
-    C & E & I --> M1[Enhanced Matcher: URL + OCR + Duration]
-    C & I --> M2[Pure Video Matcher: Bipartite Assignment + Congrats Anchor]
+    J & K --> L[Stage 4: Safe Atomic Moves]
+    L -->|--execute| M[Numbered Chapter Folders\n01 - Title.mp4]
+    L -->|Automatic Manifest| N[100% Reversible Rollback\nbackup_manifest.json]
+```
 
-    DET -->|No: Pure Video Mode| M2
-    DET -->|Yes| M1
+### The Multimodal Pillars
+1. **Play Icon (`▶`) Syllabus Extraction:** Vision AI parses outline screenshots, distinguishing video lessons (`▶`, 50 XP) from interactive coding exercises (`<>`, 100 XP) to reconstruct the canonical course syllabus.
+2. **Global Count Constraint Gate:** Enforces an atomic pre-flight check: total syllabus video lessons *must* equal total `.mp4` files on disk before moving files.
+3. **Laplacian Title Card OCR:** Evaluates early video frames (`0.5s` to `3.0s`) with Laplacian variance, discarding dark fades and selecting the crispest frame for Gemini OCR.
+4. **Opening Audio Speech Fallback:** If a video lacks a clear title card, `ffmpeg` extracts the first 15 seconds of audio. Gemini transcribes the instructor's opening sentence (where instructors almost universally introduce the topic: *"Welcome back, in this video we will discuss..."*).
+5. **Global Bipartite Assignment:** Formulates matching as an assignment problem over an $N \times M$ similarity matrix between detected titles and syllabus slots. Completely immune to out-of-order downloads.
+6. **"Congratulations!" Wrap-Up Anchor:** Automatically identifies the course conclusion lesson using duration constraints ($< 120\text{s}$) and keyword anchoring.
+7. **Airtight Rollback (`--restore`):** Moves files with checksum tracking in `backup_manifest.json`. If anything ever looks wrong, a single command reverts every file to its exact original name and folder.
 
-    M1 & M2 --> J[Move Plan Manifest]
-    J --> K[Stage 4: File Operations]
-    K -->|--execute| L[Structured Chapter Directories]
-    K -->|backup_manifest.json| M[Full Rollback Engine]
+---
+
+## Quick Start
+
+### Prerequisites
+- **Python 3.10+**
+- **FFmpeg & FFprobe** on your system `PATH`:
+  * *Windows:* `winget install ffmpeg`
+  * *macOS:* `brew install ffmpeg`
+  * *Linux:* `sudo apt-get install ffmpeg`
+- A Google Gemini API key (Free Tier works out of the box).
+
+### Installation
+```bash
+git clone https://github.com/joejamal029/datacamp-course-resequencer.git
+cd datacamp-course-resequencer
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # Windows: .\.venv\Scripts\Activate.ps1
+
+pip install -r requirements.txt
+```
+
+### Configuration
+Create a `.env` file in the tool directory:
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-3.5-flash-lite
+```
+
+---
+
+## CLI Usage
+
+### 1. Dry Run (Preview without touching disk)
+```bash
+python remediate.py "path/to/course_folder"
+```
+
+### 2. Pure Video Mode (Standard / No Transcripts Needed)
+```bash
+python remediate.py "path/to/course_folder" --mode pure_video --execute
+```
+
+### 3. Instant Rollback (`.bak` System)
+Reverts every file to its exact original name and flat location:
+```bash
+python remediate.py "path/to/course_folder" --restore
+```
+
+### 4. Batch Processing
+Organize an entire library of courses at once:
+```bash
+python remediate.py "path/to/courses_directory" --batch --execute
 ```
 
 ---
@@ -167,10 +127,10 @@ flowchart TD
 ## Project Structure
 
 ```
-remediation_tool/
+datacamp-course-resequencer/
 ├── remediate.py           # CLI entry point (dry-run, --execute, --restore, --batch, --mode)
 ├── schema_extractor.py    # Vision AI syllabus parser (outline images -> course_schema.json)
-├── md_parser.py           # Regex extractor for deterministic (?ex=N) footer URLs
+├── md_parser.py           # Regex extractor for deterministic (?ex=N) footer URLs (Enhanced Mode)
 ├── video_identifier.py    # Multi-timestamp frame extractor, sharpness scorer, and OCR
 ├── audio_identifier.py    # Opening audio extractor (15s WAV) & speech transcription fallback
 ├── matcher.py             # Dual matching engine (Enhanced multi-signal & Pure Video bipartite)
@@ -180,8 +140,24 @@ remediation_tool/
 ├── requirements.txt       # Python dependencies
 ├── .env.example           # Example configuration template
 ├── .gitignore             # Ignore keys, cache, and OS files
+├── SKILL.md               # Portable agent skill definition
 └── README.md              # Documentation
 ```
+
+---
+
+## A Blueprint for Messy Media Remediation
+
+While built and tested against DataCamp exports, this architecture serves as a broader blueprint for automated remediation of unstructured, unlabelled media:
+- Combining vision, audio ear-marking, and structured schemas to reconstruct hierarchy.
+- Eliminating fragile chronological assumptions in favor of content-derived graph assignment.
+- Pairing autonomous file reorganization with non-destructive, single-command rollback manifests.
+
+---
+
+## Disclaimer & Fair Use
+
+This tool is an independent, open-source local file utility created strictly for educational purposes and personal accessibility. It does not download, scrape, host, distribute, or bypass any access controls for proprietary course materials. Users are solely responsible for ensuring their use complies with the terms of service of the respective platforms and applicable copyright laws.
 
 ---
 
