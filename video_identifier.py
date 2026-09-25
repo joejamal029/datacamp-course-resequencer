@@ -99,9 +99,10 @@ If no title card is visible, return "NO_TITLE_CARD"."""
             )
             return resp.text.strip().strip('"\'')
         except Exception as e:
-            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                sleep_sec = 3 * (attempt + 1)
-                print(f"Rate limited (429). Retrying OCR in {sleep_sec}s...")
+            err_str = str(e).upper()
+            if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "OVERLOADED"]):
+                sleep_sec = 4 * (attempt + 1)
+                print(f"Temporary OCR issue ({e.__class__.__name__}). Retrying in {sleep_sec}s...")
                 time.sleep(sleep_sec)
             else:
                 print(f"Notice: OCR skipped for {image_path.name}: {e}")

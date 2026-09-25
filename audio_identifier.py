@@ -71,9 +71,10 @@ Return ONLY the clean topic string without quotes or explanations."""
             title = resp.text.strip().strip('"\'')
             return title
         except Exception as e:
-            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            err_str = str(e).upper()
+            if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "OVERLOADED"]):
                 sleep_sec = 4 * (attempt + 1)
-                print(f"Rate limited (429) during audio transcription. Retrying in {sleep_sec}s...")
+                print(f"Temporary audio transcription issue ({e.__class__.__name__}). Retrying in {sleep_sec}s...")
                 time.sleep(sleep_sec)
             else:
                 print(f"Notice: Audio transcription skipped for {audio_path.name}: {e}")

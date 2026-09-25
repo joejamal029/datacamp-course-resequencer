@@ -59,9 +59,10 @@ def _call_gemini_vision(image_path: Path, prompt: str, api_key: str, model_name:
             )
             return response.text
         except Exception as e:
-            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                sleep_sec = 4 * (attempt + 1)
-                print(f"Rate limit reached. Backing off for {sleep_sec}s...")
+            err_str = str(e).upper()
+            if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "OVERLOADED"]):
+                sleep_sec = 5 * (attempt + 1)
+                print(f"Temporary API issue ({e.__class__.__name__}). Backing off for {sleep_sec}s...")
                 time.sleep(sleep_sec)
             else:
                 raise
